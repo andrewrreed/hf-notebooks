@@ -89,6 +89,7 @@ async def run_agent_eval(
         score = None
         feedback = None
         parsing_error = False
+        iteration_limit_exceeded = False
         exception = e
 
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -217,7 +218,16 @@ def build_agent(hf_endpoint_url: str):
     )
 
 
-def build_evaluator(hf_endpoint_url: str):
+def build_evaluator(hf_endpoint_url: str) -> tuple:
+    """
+    Build an evaluator language model using the given Hugging Face endpoint URL.
+
+    Args:
+        hf_endpoint_url (str): The URL of the Hugging Face endpoint.
+
+    Returns:
+        Tuple: A tuple containing the evaluator chat model and the correctness prompt template.
+    """
     eval_llm = HuggingFaceEndpoint(
         endpoint_url=hf_endpoint_url,
         task="text-generation",
