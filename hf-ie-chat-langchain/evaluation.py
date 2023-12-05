@@ -1,32 +1,29 @@
-from hugging_face_chat_wrapper import HuggingFaceChatWrapper
-from prompts import SYSTEM_PROMPT, HUMAN_PROMPT
-
 import asyncio
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Any, Dict, List
+
 import pandas as pd
-
 from datasets import Dataset
-
-from tqdm import tqdm
-
-from langchain.llms import (
-    HuggingFaceEndpoint,
-)
-
-from langchain.agents import load_tools
+from hugging_face_chat_wrapper import HuggingFaceChatWrapper
+from langchain.agents import AgentExecutor, load_tools
 from langchain.agents.format_scratchpad import format_log_to_str
-from langchain.tools.render import render_text_description
-from langchain.agents import AgentExecutor
 from langchain.agents.output_parsers import (
     ReActJsonSingleInputOutputParser,
 )
-
+from langchain.llms import (
+    HuggingFaceEndpoint,
+)
+from langchain.schema import (
+    SystemMessage,
+)
 from langchain.prompts.chat import (
     ChatPromptTemplate,
-    SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
 )
+from langchain.tools.render import render_text_description
+from prompts import HUMAN_PROMPT, SYSTEM_PROMPT, PROMETHEUS_PROMPT
+from tqdm import tqdm
 
 
 async def run_agent_eval(
@@ -218,6 +215,48 @@ def build_agent(hf_endpoint_url: str):
         handle_parsing_errors=True,
         max_iterations=5,
     )
+
+
+def build_evaluator(hf_endpoint_url: str):
+    eval_llm = HuggingFaceEndpoint(
+        endpoint_url=hf_endpoint_url,
+        task="text-generation",
+        model_kwargs={
+            "max_new_tokens": 512,
+            "top_k": 50,
+            "temperature": 0.1,
+            "repetition_penalty": 1.03,
+        },
+    )
+
+    eval_chat_model = HuggingFaceChatWrapper(llm=eval_llm)
+
+    prometheus_prompt_template = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(content="You are a fair evaluator language model."),
+            HumanMessagePromptTemplate.from_template(PROMETHEUS_PROMPT),
+        ]
+    )
+
+    correctness_criteria = {
+        "criteria_description": "Is the response correct, accurate, and factual based on the reference answer?",
+        "score1_description": "The response is completely incorrect, inaccurate, and/or not factual.",
+        "score2_description": "The response is mostly incorrect, inaccurate, and/or not factual.",
+        "score3_description": "The response is somewhat correct, accurate, and/or factual.",
+        "score4_description": "The response is mostly correct, accurate, and factual.",
+        "score5_description": "The response is completely correct, accurate, and factual.",
+    }
+
+    correctness_prompt_template = prometheus_prompt_template.partial(
+        criteria_description=correctness_criteria["criteria_description"],
+        score1_description=correctness_criteria["score1_description"],
+        score2_description=correctness_criteria["score2_description"],
+        score3_description=correctness_criteria["score3_description"],
+        score4_description=correctness_criteria["score4_description"],
+        score5_description=correctness_criteria["score5_description"],
+    )
+
+    return eval_chat_model, correctness_prompt_template
 
 
 async def run_full_eval(
