@@ -1,154 +1,186 @@
 import os
+import json
 import time
 import asyncio
-import httpx
-from typing import List, Iterable
+import aiohttp
+import numpy as np
 
 
-def generate_batches(text, bs=1, total_chunks=1000):
-    """
-    Generate batches of text.
-
-    Args:
-        text (str): The input text.
-        bs (int, optional): The batch size. Defaults to 1.
-        total_chunks (int, optional): The total number of chunks to embed.
-
-    Yields:
-        list: A batch of text.
-
-    """
-    batches = []
-    batch = []
-    for i in range(total_chunks):
-        batch.append(text)
-        if len(batch) == bs:
-            batches.append(batch)
-            batch = []
-    if batch:
-        batches.append(batch)
-
-    return batches
+# Generator for batching data
+def batch_generator(data, batch_size):
+    for i in range(0, len(data), batch_size):
+        yield data[i : i + batch_size]
 
 
-async def make_request(client: httpx.AsyncClient, batch: List[str]):
-    """
-    Makes a request to the specified host URL with the given batch of inputs.
+# Coroutine for fetching embeddings
+async def fetch_embeddings(batch, semaphore, session):
+    async with semaphore:
+        try:
+            # Prepare request payload based on API requirements
+            host_url = os.getenv("HOST")
+            headers = {
+                "Accept": "application/json",
+                "Authorization": "Bearer " + os.getenv("HF_API_KEY"),
+                "Content-Type": "application/json",
+            }
+            payload = {"inputs": [item["text"] for item in batch], "truncate": True}
 
-    Args:
-        client (httpx.AsyncClient): The HTTP client used to make the request.
-        batch (list): The batch of inputs to be sent in the request.
+            async with session.post(
+                host_url, headers=headers, json=payload
+            ) as response:
+                if response.status == 200:
+                    embeddings = await response.json()
 
-    Returns:
-        dict: A dictionary containing the response data and request metadata. The dictionary has the following keys:
-            - 'embeddings': The response JSON containing the embeddings.
-            - 'request_metadata': A dictionary containing metadata about the request, including total time, tokenization time,
-              queue time, and inference time.
+                    # Extract timing information from headers
+                    timing_info = {
+                        "total_time": float(response.headers.get("X-Total-Time", 0)),
+                        "tokenization_time": float(
+                            response.headers.get("X-Tokenization-Time", 0)
+                        ),
+                        "queue_time": float(response.headers.get("X-Queue-Time", 0)),
+                        "inference_time": float(
+                            response.headers.get("X-Inference-Time", 0)
+                        ),
+                    }
+                    return [
+                        {
+                            "unique_id": item["unique_id"],
+                            "embedding": emb,
+                            "error": False,
+                            "timing_info": timing_info,
+                        }
+                        for item, emb in zip(batch, embeddings)
+                    ]
+                else:
+                    error_details = await response.json()
+                    return [
+                        {
+                            "unique_id": item["unique_id"],
+                            "embedding": None,
+                            "error": error_details,
+                            "timing_info": None,
+                        }
+                        for item in batch
+                    ]
+        except Exception as e:
+            return [
+                {
+                    "unique_id": item["unique_id"],
+                    "embedding": None,
+                    "error": str(e),
+                    "timing_info": None,
+                }
+                for item in batch
+            ]
 
-    """
-    host_url = os.getenv("HOST")
-    headers = {
-        "Accept": "application/json",
-        "Authorization": "Bearer " + os.getenv("HF_API_KEY"),
-        "Content-Type": "application/json",
+
+# Save results in JSON lines format
+def save_results(results, filename):
+    with open(filename, "a") as f:
+        for result in results:
+            f.write(json.dumps(result) + "\n")
+
+
+def calculate_statistics(metrics):
+    statistics = {}
+    for key, values in metrics.items():
+        if values:  # Ensure the list is not empty
+            statistics[key] = {
+                "mean": np.mean(values),
+                "min": min(values),
+                "median": np.median(values),
+                "max": max(values),
+                "p90": np.percentile(values, 90),
+                "p95": np.percentile(values, 95),
+            }
+    return statistics
+
+
+# Main coroutine that orchestrates the pipeline
+async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
+    semaphore = asyncio.Semaphore(concurrency)
+    batches = batch_generator(data, batch_size)
+
+    # Initialize metrics collections
+    start_time = time.time()
+    timing_metrics = {
+        "total_time": [],
+        "tokenization_time": [],
+        "queue_time": [],
+        "inference_time": [],
     }
-    payload = {"inputs": batch, "truncate": True}
-    response = await client.post(host_url, headers=headers, json=payload, timeout=10.0)
+    request_metrics = {"success": 0, "failure": 0, "total": 0}
 
-    if response.status_code == 200:
-        request_metadata = {
-            "total_time": response.headers["X-Total-Time"],
-            "tokenization_time": response.headers["X-Tokenization-Time"],
-            "queue_time": response.headers["X-Queue-Time"],
-            "inference_time": response.headers["X-Inference-Time"],
-        }
-        return {
-            "embeddings": response.json(),
-            "request_metadata": request_metadata,
-            "error": False,
-        }
-    else:
-        print(
-            f"Request failed with status code {response.status_code}: {response.text}"
-        )
-        return {
-            "embeddings": None,
-            "request_metadata": None,
-            "error": response.text,
-        }
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_embeddings(batch, semaphore, session) for batch in batches]
+
+        # .as_completed() rather than .gather() to increase throughput
+        for batch_future in asyncio.as_completed(tasks):
+            results = await batch_future  # returns List[Dict] of length batch_size
+
+            if filename:
+                save_results(results, filename)
+
+            # Aggregate timing metrics for successful requests
+            for result in results:
+                request_metrics["total"] += 1
+                if not result.get("error"):
+                    request_metrics["success"] += 1
+                    for key, value in result["timing_info"].items():
+                        timing_metrics[key].append(value)
+                else:
+                    request_metrics["failure"] += 1
+
+    end_time = time.time()
+
+    # Collect metrics
+    total_time = round(end_time - start_time, 4)
+    embeddings_per_second = request_metrics["success"] / total_time
+    timing_statistics = calculate_statistics(timing_metrics)
+    run_metadata = {
+        "batch_size": batch_size,
+        "concurrency": concurrency,
+        "filename": filename,
+    }
+
+    # Print metrics
+    print("Timing Metrics Statistics: \n")
+    for metric, stats in timing_statistics.items():
+        print(f"\n{metric}:")
+        for stat_name, stat_value in stats.items():
+            print(f"  {stat_name}: {round(stat_value*0.001, 4)} seconds")
+
+    print(
+        f"\n\nTotal pipeline execution time (time to embed all data): {total_time} seconds"
+    )
+    print(f"Total number of chunks to embed: {request_metrics['total']}")
+    print(f"Total number of chunks embedded: {request_metrics['success']}")
+    print(f"Total number of chunks that hit an error: {request_metrics['failure']}")
+    print(f"Embeddings per second (completed requests): {embeddings_per_second}")
+
+    return {
+        "timing_statistics": timing_statistics,
+        "total_time": total_time,
+        "embeddings_per_second": embeddings_per_second,
+        "request_metrics": request_metrics,
+        "run_metadata": run_metadata,
+    }
 
 
-async def embed(
-    batches: Iterable[List[str]],
-    concurrency_level: int = 1,
-    collect_embeddings: bool = True,
-):
-    """
-    Embeds a list of batches of text using an asynchronous HTTP client.
+# TO DO:
+# - Add logging
+# - Add error handling
+# - Add command-line argument parsing for batch size and concurrency level
+# - Add tests
 
-    Args:
-        batches (List[List[str]]): A list of batches, where each batch is a list of strings.
-        concurrency_level (int, optional): The number of concurrent requests to make. Defaults to 1.
-        collect_embeddings (bool, optional): Whether to collect and return the embedding results. Defaults to True.
 
-    Returns:
-        dict: A dictionary containing the embedding results and metadata.
-
-    Example:
-        >>> batches = [["text1", "text2"], ["text3", "text4"]]
-        >>> result = await embed(batches, concurrency_level=2, collect_results=True)
-    """
-    async with httpx.AsyncClient() as client:
-        # Function to process a chunk of batches concurrently
-        async def process_chunk(chunk):
-            responses = await asyncio.gather(
-                *[make_request(client, batch) for batch in chunk],
-                return_exceptions=False,
-            )
-            return responses
-
-        start_time = time.time()
-
-        # Split batches into chunks based on concurrency level
-        # A chunk is a list of batches of length `concurrency_level`
-        chunks = [
-            batches[i : i + concurrency_level]
-            for i in range(0, len(batches), concurrency_level)
-        ]
-
-        # Process each batch in a chunk concurrently
-        results = {"embeddings": [], "request_metadata": [], "errors": []}
-        for chunk in chunks:
-            result = await process_chunk(chunk)
-            results["request_metadata"].extend(
-                [batch["request_metadata"] for batch in result]
-            )
-            results["errors"].extend([batch["error"] for batch in result])
-
-            if collect_embeddings:
-                results["embeddings"].extend([batch["embeddings"] for batch in result])
-
-        # gather overall metrics
-        end_time = time.time()
-        total_time = round(end_time - start_time, 4)
-        num_chunks_embedded = sum([len(sublist) for sublist in batches])
-        req_per_sec = round(len(chunks) / total_time, 4)
-        embed_per_sec = round(num_chunks_embedded / total_time, 4)
-
-        print(
-            f"Batch Size: {len(batches[0])}, Concurrency Level: {concurrency_level}, Total Time: {total_time:.2f} seconds, RPS: {req_per_sec:.2f}, Embed per sec: {embed_per_sec:.2f}"
-        )
-
-        return {
-            "embeddings": results["embeddings"] if collect_embeddings else None,
-            "request_metadata": (results["request_metadata"]),
-            "metrics": {
-                "batch_size": len(batches[0]),
-                "concurrency_level": concurrency_level,
-                "total_time": total_time,
-                "num_chunks_embedded": num_chunks_embedded,
-                "req_per_sec": req_per_sec,
-                "embed_per_sec": embed_per_sec,
-            },
-            "errors": results["errors"],
-        }
+# if __name__ == "__main__":
+#     data = [
+#         {"unique_id": n, "text": f"This is a test sentence - {n}"}
+#         for n in range(10_000)
+#     ]
+#     batch_size = 32
+#     concurrency = 10
+#     # print(os.getcwd())
+#     os.remove("embeddings.jsonl")
+#     asyncio.run(main(data, batch_size, concurrency))
