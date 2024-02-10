@@ -45,7 +45,7 @@ async def fetch_embeddings(batch, semaphore, session):
                     return [
                         {
                             "unique_id": item["unique_id"],
-                            "embedding": emb,
+                            "embedding": emb[:10],
                             "error": False,
                             "timing_info": timing_info,
                         }
@@ -86,10 +86,10 @@ def calculate_statistics(metrics):
     for key, values in metrics.items():
         if values:  # Ensure the list is not empty
             statistics[key] = {
-                "mean": np.mean(values),
                 "min": min(values),
-                "median": np.median(values),
                 "max": max(values),
+                "mean": np.mean(values),
+                "median": np.median(values),
                 "p90": np.percentile(values, 90),
                 "p95": np.percentile(values, 95),
             }
@@ -135,7 +135,7 @@ async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
 
     # Collect metrics
     total_time = round(end_time - start_time, 4)
-    embeddings_per_second = request_metrics["success"] / total_time
+    embeddings_per_second = round(request_metrics["success"] / total_time, 4)
     timing_statistics = calculate_statistics(timing_metrics)
     run_metadata = {
         "batch_size": batch_size,
@@ -143,20 +143,9 @@ async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
         "filename": filename,
     }
 
-    # Print metrics
-    print("Timing Metrics Statistics: \n")
-    for metric, stats in timing_statistics.items():
-        print(f"\n{metric}:")
-        for stat_name, stat_value in stats.items():
-            print(f"  {stat_name}: {round(stat_value*0.001, 4)} seconds")
-
     print(
-        f"\n\nTotal pipeline execution time (time to embed all data): {total_time} seconds"
+        f"Batch Size: {batch_size}, Concurrency Level: {concurrency}, Total Time: {total_time} seconds, Embed per sec: {embeddings_per_second}, Num Success: {request_metrics['success']}, Num Failures: {request_metrics['failure']}"
     )
-    print(f"Total number of chunks to embed: {request_metrics['total']}")
-    print(f"Total number of chunks embedded: {request_metrics['success']}")
-    print(f"Total number of chunks that hit an error: {request_metrics['failure']}")
-    print(f"Embeddings per second (completed requests): {embeddings_per_second}")
 
     return {
         "timing_statistics": timing_statistics,
@@ -169,9 +158,9 @@ async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
 
 # TO DO:
 # - Add logging
-# - Add error handling
-# - Add command-line argument parsing for batch size and concurrency level
 # - Add tests
+# - Capture RPS
+# - Cleanup docstrings
 
 
 # if __name__ == "__main__":
