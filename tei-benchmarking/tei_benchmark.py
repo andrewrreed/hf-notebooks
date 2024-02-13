@@ -4,16 +4,49 @@ import time
 import asyncio
 import aiohttp
 import numpy as np
+from typing import List, Dict, Any
 
 
-# Generator for batching data
-def batch_generator(data, batch_size):
+def batch_generator(data: List[Dict[str, Any]], batch_size: int):
+    """
+    Generates batches of data.
+
+    Args:
+        data (List[Dict[str, Any]]): A list of dictionaries representing the data. Each dictionary should have the following keys:
+            - "unique_id" (str): A unique identifier for the data.
+            - "text" (str): The text data.
+        batch_size (int): The size of each batch.
+
+    Yields:
+        List[Dict[str, Any]]: A batch of data.
+
+    """
     for i in range(0, len(data), batch_size):
         yield data[i : i + batch_size]
 
 
-# Coroutine for fetching embeddings
-async def fetch_embeddings(batch, semaphore, session):
+async def fetch_embeddings(
+    batch: List[Dict[str, Any]],
+    semaphore: asyncio.Semaphore,
+    session: aiohttp.ClientSession,
+) -> List[Dict[str, Any]]:
+    """
+    Fetches embeddings for a batch of texts using an API.
+
+    Args:
+        batch (List[Dict[str, Any]]): A list of dictionaries representing the batch of texts. Each dictionary should have the following keys:
+            - "unique_id" (str): A unique identifier for the text.
+            - "text" (str): The text to be embedded.
+        semaphore (asyncio.Semaphore): A semaphore to limit the number of concurrent requests.
+        session (aiohttp.ClientSession): An HTTP client session for making requests.
+
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries representing the embeddings and timing information for each text in the batch. Each dictionary has the following keys:
+            - "unique_id" (str): The unique identifier of the text.
+            - "embedding" (str): The embedding of the text. If an error occurred, this will be None.
+            - "error" (bool or dict): If an error occurred, this will be True. Otherwise, it will be False. If an error occurred, this will be a dictionary containing the error details.
+            - "timing_info" (dict): A dictionary containing timing information for the request. If an error occurred, this will be None.
+    """
     async with semaphore:
         try:
             # Prepare request payload based on API requirements
@@ -74,14 +107,32 @@ async def fetch_embeddings(batch, semaphore, session):
             ]
 
 
-# Save results in JSON lines format
-def save_results(results, filename):
+def save_results(results: List[dict], filename: str) -> None:
+    """
+    Save the results to a file.
+
+    Args:
+        results (List[dict]): The list of results to be saved.
+        filename (str): The name of the file to save the results to.
+
+    Returns:
+        None
+    """
     with open(filename, "a") as f:
         for result in results:
             f.write(json.dumps(result) + "\n")
 
 
-def calculate_statistics(metrics):
+def calculate_statistics(metrics: dict) -> dict:
+    """
+    Calculate statistics for each metric in the given dictionary.
+
+    Args:
+        metrics (dict): A dictionary containing metrics as keys and lists of values as values.
+
+    Returns:
+        dict: A dictionary containing statistics for each metric, including min, max, mean, median, p90, and p95.
+    """
     statistics = {}
     for key, values in metrics.items():
         if values:  # Ensure the list is not empty
@@ -97,7 +148,26 @@ def calculate_statistics(metrics):
 
 
 # Main coroutine that orchestrates the pipeline
-async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
+async def main(
+    data: List[Dict[str, Any]],
+    batch_size: int,
+    concurrency: int,
+    filename: str = "embeddings.jsonl",
+) -> Dict[str, Any]:
+    """
+    Perform benchmarking of TEI embeddings.
+
+    Args:
+        data (List[Dict[str, Any]]): The input data for generating embeddings.
+        batch_size (int): The number of samples in each batch.
+        concurrency (int): The maximum number of concurrent requests.
+        filename (str, optional): The name of the file to save the results. Defaults to "embeddings.jsonl".
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the benchmarking results, including timing statistics,
+        total time, embeddings per second, request metrics, and run metadata.
+    """
+
     semaphore = asyncio.Semaphore(concurrency)
     batches = batch_generator(data, batch_size)
 
@@ -160,16 +230,3 @@ async def main(data, batch_size, concurrency, filename="embeddings.jsonl"):
 # - Add logging
 # - Add tests
 # - Capture RPS
-# - Cleanup docstrings
-
-
-# if __name__ == "__main__":
-#     data = [
-#         {"unique_id": n, "text": f"This is a test sentence - {n}"}
-#         for n in range(10_000)
-#     ]
-#     batch_size = 32
-#     concurrency = 10
-#     # print(os.getcwd())
-#     os.remove("embeddings.jsonl")
-#     asyncio.run(main(data, batch_size, concurrency))
