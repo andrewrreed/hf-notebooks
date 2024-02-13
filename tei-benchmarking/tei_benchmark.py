@@ -1,10 +1,11 @@
 import os
-import json
 import time
 import asyncio
 import aiohttp
 import numpy as np
 from typing import List, Dict, Any
+
+from utils import save_results
 
 
 def batch_generator(data: List[Dict[str, Any]], batch_size: int):
@@ -105,22 +106,6 @@ async def fetch_embeddings(
                 }
                 for item in batch
             ]
-
-
-def save_results(results: List[dict], filename: str) -> None:
-    """
-    Save the results to a file.
-
-    Args:
-        results (List[dict]): The list of results to be saved.
-        filename (str): The name of the file to save the results to.
-
-    Returns:
-        None
-    """
-    with open(filename, "a") as f:
-        for result in results:
-            f.write(json.dumps(result) + "\n")
 
 
 def calculate_statistics(metrics: dict) -> dict:
