@@ -133,14 +133,14 @@ def calculate_statistics(metrics: dict) -> dict:
 
 
 # Main coroutine that orchestrates the pipeline
-async def main(
+async def run_bulk_embed(
     data: List[Dict[str, Any]],
     batch_size: int,
     concurrency: int,
     filename: str = "embeddings.jsonl",
 ) -> Dict[str, Any]:
     """
-    Perform benchmarking of TEI embeddings.
+    Run bulk embedding inference pipeline using the given data and parameters.
 
     Args:
         data (List[Dict[str, Any]]): The input data for generating embeddings.
