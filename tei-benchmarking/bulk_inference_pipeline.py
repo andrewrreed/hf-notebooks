@@ -27,6 +27,8 @@ def batch_generator(data: List[Dict[str, Any]], batch_size: int):
 
 
 async def fetch_embeddings(
+    endpoint: str,
+    api_key: str,
     batch: List[Dict[str, Any]],
     semaphore: asyncio.Semaphore,
     session: aiohttp.ClientSession,
@@ -35,6 +37,8 @@ async def fetch_embeddings(
     Fetches embeddings for a batch of texts using an API.
 
     Args:
+        endpoint (str): The API endpoint for fetching embeddings.
+        api_key (str): The API key for authenticating requests.
         batch (List[Dict[str, Any]]): A list of dictionaries representing the batch of texts. Each dictionary should have the following keys:
             - "unique_id" (str): A unique identifier for the text.
             - "text" (str): The text to be embedded.
@@ -51,16 +55,15 @@ async def fetch_embeddings(
     async with semaphore:
         try:
             # Prepare request payload based on API requirements
-            host_url = os.getenv("HOST")
             headers = {
                 "Accept": "application/json",
-                "Authorization": "Bearer " + os.getenv("HF_API_KEY"),
+                "Authorization": "Bearer " + api_key if api_key else "",
                 "Content-Type": "application/json",
             }
             payload = {"inputs": [item["text"] for item in batch], "truncate": True}
 
             async with session.post(
-                host_url, headers=headers, json=payload
+                endpoint, headers=headers, json=payload
             ) as response:
                 if response.status == 200:
                     embeddings = await response.json()
@@ -134,6 +137,8 @@ def calculate_statistics(metrics: dict) -> dict:
 
 # Main coroutine that orchestrates the pipeline
 async def run_bulk_embed(
+    endpoint: str,
+    api_key: str,
     data: List[Dict[str, Any]],
     batch_size: int,
     concurrency: int,
@@ -143,6 +148,8 @@ async def run_bulk_embed(
     Run bulk embedding inference pipeline using the given data and parameters.
 
     Args:
+        endpoint (str): The API endpoint for fetching embeddings.
+        api_key (str): The API key for authenticating requests.
         data (List[Dict[str, Any]]): The input data for generating embeddings.
         batch_size (int): The number of samples in each batch.
         concurrency (int): The maximum number of concurrent requests.
@@ -167,7 +174,10 @@ async def run_bulk_embed(
     request_metrics = {"success": 0, "failure": 0, "total": 0}
 
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_embeddings(batch, semaphore, session) for batch in batches]
+        tasks = [
+            fetch_embeddings(endpoint, api_key, batch, semaphore, session)
+            for batch in batches
+        ]
 
         # .as_completed() rather than .gather() to increase throughput
         for batch_future in asyncio.as_completed(tasks):
