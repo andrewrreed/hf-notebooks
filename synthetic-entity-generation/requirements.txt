@@ -1,0 +1,2 @@
+outlines==0.0.33
+pydantic==2.6.3
