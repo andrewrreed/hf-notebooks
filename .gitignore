@@ -162,3 +162,4 @@ cython_debug/
 tei-benchmarking/k6-experiment-results*
 *mlruns*
 *checkpoint*
+asr-diarization-walkthrough/models/*
