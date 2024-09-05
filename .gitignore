@@ -163,3 +163,4 @@ tei-benchmarking/k6-experiment-results*
 *mlruns*
 *checkpoint*
 asr-diarization-walkthrough/models/*
+bert-onnx-optimum-benchmark/onnx/*
